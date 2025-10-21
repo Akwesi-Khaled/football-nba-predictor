@@ -1,47 +1,42 @@
+import sys, os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 import streamlit as st
-import pandas as pd
-import joblib
-from src.data_loader import load_football, load_nba
-import numpy as np
+from src.data_loader import load_football_data, load_nba_data
+from src.model import train_poisson_model, train_nba_model
+from src.predictor import predict_football, predict_nba
+from src.utils import show_probabilities
 
-st.set_page_config(page_title="Sample Football & NBA Predictor", layout="centered")
-st.title("Sample Football & NBA Predictor (Demo)")
+st.set_page_config(page_title="Sports Predictor", page_icon="⚽🏀", layout="centered")
 
-sport = st.selectbox("Choose sport", ["Football", "NBA"])
+st.title("🏆 Sports Outcome Predictor")
+st.markdown("#### Predict results for top **Football** and **NBA** matchups.")
 
-if sport == "Football":
-    st.header("Football (Sample)")
-    df = load_football('data/raw/football_matches_sample.csv')
-    teams = sorted(list(set(df['home_team']).union(set(df['away_team']))))
-    home = st.selectbox("Home team", teams)
-    away = st.selectbox("Away team", [t for t in teams if t!=home])
-    if st.button("Predict football outcome"):
-        # naive features: use average historical goals for the selected teams
-        home_avg = df[df['home_team']==home]['home_score'].mean() if not df[df['home_team']==home].empty else df['home_score'].mean()
-        away_avg = df[df['away_team']==away]['away_score'].mean() if not df[df['away_team']==away].empty else df['away_score'].mean()
-        X = pd.DataFrame({'home_score':[home_avg],'away_score':[away_avg]})
-        model = joblib.load('models/football_simple_lr.joblib')
-        probs = model.predict_proba(X)[0]
-        st.write("Predicted probabilities:")
-        st.write(f"Home win: {probs[1]:.3f}, Draw: {probs[0]:.3f}, Away win: {probs[2]:.3f}")
-        # compute expected score naive using averages
-        st.write(f"Naive expected goals — Home: {home_avg:.2f}, Away: {away_avg:.2f}")
+league = st.sidebar.selectbox("Select League", ["Football", "NBA"])
 
-else:
-    st.header("NBA (Sample)")
-    df = load_nba('data/raw/nba_games_sample.csv')
-    teams = sorted(list(set(df['home_team']).union(set(df['away_team']))))
-    home = st.selectbox("Home team", teams)
-    away = st.selectbox("Away team", [t for t in teams if t!=home])
-    if st.button("Predict NBA outcome"):
-        home_avg = df[df['home_team']==home]['home_points'].mean() if not df[df['home_team']==home].empty else df['home_points'].mean()
-        away_avg = df[df['away_team']==away]['away_points'].mean() if not df[df['away_team']==away].empty else df['away_points'].mean()
-        X = pd.DataFrame({'home_points':[home_avg],'away_points':[away_avg]})
-        model = joblib.load('models/nba_simple_reg.joblib')
-        pred_diff = model.predict(X)[0]
-        # convert to win probability using logistic-like transform
-        prob_home = 1 / (1 + np.exp(-pred_diff/10))  # scale factor for demo
-        st.write(f"Predicted point differential (home - away): {pred_diff:.2f}")
-        st.write(f"Estimated home win probability: {prob_home:.3f}")
-        st.write(f"Naive expected points — Home: {home_avg:.1f}, Away: {away_avg:.1f}")
+if league == "Football":
+    df = load_football_data()
+    teams = sorted(df['HomeTeam'].unique())
+
+    col1, col2 = st.columns(2)
+    with col1:
+        home_team = st.selectbox("Home Team", teams)
+    with col2:
+        away_team = st.selectbox("Away Team", teams)
+
+    if home_team != away_team and st.button("Predict Outcome"):
+        home_model, away_model = train_poisson_model(df)
+        home_prob, draw_prob, away_prob = predict_football(home_model, away_model, home_team, away_team)
+        show_probabilities(home_prob, draw_prob, away_prob)
+
+elif league == "NBA":
+    df = load_nba_data()
+    model = train_nba_model(df)
+
+    st.write("Enter recent team performance points (approx.):")
+    home_points = st.slider("Home Avg Points", 80, 140, 110)
+    away_points = st.slider("Away Avg Points", 80, 140, 105)
+
+    if st.button("Predict NBA Result"):
+        home_win_prob = predict_nba(model, home_points, away_points)
+        show_probabilities(home_win_prob, 0, 1 - home_win_prob)
